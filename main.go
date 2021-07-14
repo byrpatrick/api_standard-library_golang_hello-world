@@ -70,5 +70,6 @@ func main() {
 		Handler: router,
 	}
 
+	log.Printf("API server listening on %s", server.Addr)
 	log.Fatal(server.ListenAndServe())
 }
