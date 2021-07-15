@@ -64,13 +64,13 @@ func handleCORS(next http.Handler) http.Handler {
 func main() {
 	router := http.NewServeMux()
 	router.Handle("/", http.NotFoundHandler())
-	router.Handle("/api/messages/public", handleCORS(http.HandlerFunc(publicApiHandler)))
-	router.Handle("/api/messages/protected", handleCORS(http.HandlerFunc(protectedApiHandler)))
-	router.Handle("/api/messages/admin", handleCORS(http.HandlerFunc(adminApiHandler)))
+	router.Handle("/api/messages/public", http.HandlerFunc(publicApiHandler))
+	router.Handle("/api/messages/protected", http.HandlerFunc(protectedApiHandler))
+	router.Handle("/api/messages/admin", http.HandlerFunc(adminApiHandler))
 
 	server := &http.Server{
 		Addr:    ":6060",
-		Handler: router,
+		Handler: handleCORS(router),
 	}
 
 	log.Printf("API server listening on %s", server.Addr)
