@@ -67,10 +67,11 @@ func main() {
 	router.Handle("/api/messages/public", http.HandlerFunc(publicApiHandler))
 	router.Handle("/api/messages/protected", http.HandlerFunc(protectedApiHandler))
 	router.Handle("/api/messages/admin", http.HandlerFunc(adminApiHandler))
+	routerWithCORS := handleCORS(router)
 
 	server := &http.Server{
 		Addr:    ":6060",
-		Handler: handleCORS(router),
+		Handler: routerWithCORS,
 	}
 
 	log.Printf("API server listening on %s", server.Addr)
