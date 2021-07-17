@@ -98,8 +98,8 @@ func validateToken(next http.Handler) http.Handler {
 			sendMessage(rw, &message{"invalid audience"})
 			return
 		}
-		ctx := context.WithValue(req.Context(), ctxTokenKey, token)
-		next.ServeHTTP(rw, req.WithContext(ctx))
+		ctxWithToken := context.WithValue(req.Context(), ctxTokenKey, token)
+		next.ServeHTTP(rw, req.WithContext(ctxWithToken))
 	})
 }
 
@@ -126,9 +126,9 @@ func extractToken(req *http.Request) (jwt.Token, error) {
 	return jwt.Parse([]byte(bearerAndToken[1]), jwt.WithKeySet(tenantKeys))
 }
 
-// getTenantKeys fetch and parse the tenant JSON Web Keys (JWK). The keys
+// fetchTenantKeys fetch and parse the tenant JSON Web Keys (JWK). The keys
 // are used for JWT token validation during requests authorization.
-func getTenantKeys() {
+func fetchTenantKeys() {
 	set, err := jwk.Fetch(context.Background(),
 		fmt.Sprintf("https://%s/.well-known/jwks.json", auth0Domain))
 	if err != nil {
@@ -138,7 +138,9 @@ func getTenantKeys() {
 }
 
 func exitWithError(message string) {
-	fmt.Fprintf(os.Stderr, "%s\n", message)
+	fmt.Fprintf(os.Stderr, "%s\n\n", message)
+	fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
+	flag.PrintDefaults()
 	os.Exit(1)
 }
 
@@ -158,7 +160,7 @@ func parseArgs() {
 
 func main() {
 	parseArgs()
-	getTenantKeys()
+	fetchTenantKeys()
 
 	router := http.NewServeMux()
 	router.Handle("/", http.NotFoundHandler())
