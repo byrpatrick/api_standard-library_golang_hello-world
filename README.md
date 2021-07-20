@@ -5,6 +5,23 @@ from a client application.
 
 ## Get Started
 
+### Set up the project
+
+Install the project dependencies:
+
+```bash
+go mod download
+```
+
+Open the `env.yaml` file at the root of the project and update the values of `auth0-audience` and `auth0-domain`.
+
+```yaml
+auth0-audience: my_auth0_api_audience
+auth0-domain: my_auth0_tenant_domain
+```
+
+The following sections further details the steps to identify the values for these variables within your setup.
+
 ### Register a Golang API with Auth0
 
 - Open the [APIs](https://manage.auth0.com/#/apis) section of the Auth0 Dashboard.
@@ -31,6 +48,8 @@ Head back to your Auth0 API page, and follow these steps to get the Auth0 Audien
 
 - Locate the "Identifier" field and copy its value.
 
+- Paste the Auth0 domain value as the value of `auth0-audience` in `env.yaml`.
+
 Now, follow these steps to get the Auth0 Domain value:
 
 ![Get the Auth0 Domain to configure an API](https://images.ctfassets.net/23aumh6u8s0i/37J4EUXKJWZxHIyxAQ8SYI/d968d967b5e954fc400163638ac2625f/get-the-auth0-domain)
@@ -43,6 +62,8 @@ Now, follow these steps to get the Auth0 Domain value:
 
 - Locate your Auth0 domain, which is part of the `--url` parameter value: `tenant-name.region.auth0.com`.
 
+- Paste the Auth0 domain value as the value of `auth0-domain` in `env.yaml`.
+
 **Tips to get the Auth0 Domain**
 
 - The Auth0 Domain is the substring between the protocol, `https://` and the path `/oauth/token`.
@@ -53,20 +74,33 @@ Now, follow these steps to get the Auth0 Domain value:
 
 ### Run the API server:
 
-Run the API server by using any of the following commands. Please replace `<auth0_identifier>` and `<auth0_domain>`
-values appropriate as per your setup as per above instructions.
+Run the API server by using any of the following commands. Please replace `my_auth0_api_audience`
+and `my_auth0_api_domain` values appropriate as per your setup using instructions above.
 
 ```shell
-go run . -a <auth0_identifier> -d <auth0_domain>
+# with a populated env.yaml present in current directory
+go run .
 
-# OR 
-AUTH0_AUDIENCE=<auth0_identifier> AUTH0_DOMAIN=<auth0_domain> go run .
+# Alternatively, if env.yaml is not present, you can also pass values using CLI parameters  
+go run . -a my_auth0_api_audience -d my_auth0_api_domain
 
-# OR
-export AUTH0_AUDIENCE=<auth0_identifier>
-export AUTH0_DOMAIN=<auth0_domain>
+# OR, you can pass values using shell variables on CLI
+AUTH0_AUDIENCE=my_auth0_api_audience AUTH0_DOMAIN=my_auth0_api_domain go run .
+
+# OR, you may also expose the values as environment variable upfront
+export AUTH0_AUDIENCE=my_auth0_api_audience
+export AUTH0_DOMAIN=my_auth0_api_domain
 go run .
 ```
+
+In case the auth0 `audience` and `domain` values are present at multiple sources, the following precedence order is used
+to determine effective values:
+
+- CLI parameters values has the highest precedence
+
+- Shell/Environment variables takes the next precedence
+
+- Values from `env.yaml` has the lowest precedence
 
 ## Test the Protected Endpoints
 
