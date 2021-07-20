@@ -6,19 +6,28 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
+	"path"
 	"strings"
 
 	"github.com/lestrrat-go/jwx/jwk"
 	"github.com/lestrrat-go/jwx/jwt"
+	"gopkg.in/yaml.v3"
 )
 
 const (
 	corsAllowedDomain = "http://localhost:4040"
 	authHeader        = "Authorization"
 	ctxTokenKey       = "Auth0Token"
+)
+
+const (
+	yamlCfgFileName = "env.yaml"
+	domainYamlKey   = "auth0-domain"
+	audienceYamlKey = "auth0-audience"
 )
 
 // variables required from user
@@ -144,23 +153,63 @@ func exitWithError(message string) {
 	os.Exit(1)
 }
 
+func loadEnvYAML() {
+	// yaml configuration is expected in current working directory
+	myWd, err := os.Getwd()
+	if err != nil {
+		log.Fatal(err)
+	}
+	envCfg := path.Join(myWd, yamlCfgFileName)
+	_, err = os.Stat(envCfg)
+	if err != nil && errors.Is(err, os.ErrNotExist) {
+		return
+	}
+	cfgContents, err := ioutil.ReadFile(envCfg)
+	if err != nil {
+		log.Fatalf("error reading %s: %v ", yamlCfgFileName, err)
+	}
+	cfg := map[string]string{}
+	err = yaml.Unmarshal(cfgContents, cfg)
+	if err != nil {
+		log.Fatalf("yaml unmarshal error: %v", err)
+	}
+	if val, found := cfg[domainYamlKey]; found {
+		auth0Domain = val
+	}
+	if val, found := cfg[audienceYamlKey]; found {
+		auth0Audience = val
+	}
+}
+
 func parseArgs() {
-	flag.StringVar(&auth0Audience, "a",
+	var argAudience, argDomain string
+	flag.StringVar(&argAudience, "a",
 		os.Getenv("AUTH0_AUDIENCE"), "Auth0 API identifier, as audience")
-	flag.StringVar(&auth0Domain, "d",
+	flag.StringVar(&argDomain, "d",
 		os.Getenv("AUTH0_DOMAIN"), "Auth0 API tenant domain")
 	flag.Parse()
+	if argAudience != "" {
+		auth0Audience = argAudience
+	}
+	if argDomain != "" {
+		auth0Domain = argDomain
+	}
+}
+
+func initConfig() {
+	loadEnvYAML()
+	parseArgs()
 	if auth0Audience == "" {
 		exitWithError("Auth0 API identifier (as audience) missing")
 	}
 	if auth0Domain == "" {
 		exitWithError("Auth0 API tenant domain missing")
 	}
+	fetchTenantKeys()
 }
 
 func main() {
-	parseArgs()
-	fetchTenantKeys()
+	initConfig()
 
 	router := http.NewServeMux()
 	router.Handle("/", http.NotFoundHandler())
