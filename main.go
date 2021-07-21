@@ -4,11 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"strings"
 
 	"github.com/lestrrat-go/jwx/jwk"
@@ -19,6 +17,12 @@ const (
 	corsAllowedDomain = "http://localhost:4040"
 	authHeader        = "Authorization"
 	ctxTokenKey       = "Auth0Token"
+)
+
+const (
+	yamlCfgFileName = "env.yaml"
+	domainYamlKey   = "auth0-domain"
+	audienceYamlKey = "auth0-audience"
 )
 
 // variables required from user
@@ -84,6 +88,7 @@ func handleCORS(next http.Handler) http.Handler {
 	})
 }
 
+// validateToken middleware verifies a valid Auth0 JWT token being present in the request.
 func validateToken(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
 		token, err := extractToken(req)
@@ -93,27 +98,14 @@ func validateToken(next http.Handler) http.Handler {
 			sendMessage(rw, &message{err.Error()})
 			return
 		}
-		if !containsValidAudience(token) {
-			rw.WriteHeader(http.StatusUnauthorized)
-			sendMessage(rw, &message{"invalid audience"})
-			return
-		}
-		ctx := context.WithValue(req.Context(), ctxTokenKey, token)
-		next.ServeHTTP(rw, req.WithContext(ctx))
+		ctxWithToken := context.WithValue(req.Context(), ctxTokenKey, token)
+		next.ServeHTTP(rw, req.WithContext(ctxWithToken))
 	})
 }
 
-func containsValidAudience(token jwt.Token) bool {
-	for _, anAudience := range token.Audience() {
-		if anAudience == auth0Audience {
-			return true
-		}
-	}
-	return false
-}
-
 // extractToken parses the Authorization HTTP header for valid JWT token and
-// validates it with AUTH0 JWK keys
+// validates it with AUTH0 JWK keys. Also verifies if the audience present in
+// the token matches with the designated audience as per current configuration.
 func extractToken(req *http.Request) (jwt.Token, error) {
 	authorization := req.Header.Get(authHeader)
 	if authorization == "" {
@@ -123,12 +115,26 @@ func extractToken(req *http.Request) (jwt.Token, error) {
 	if len(bearerAndToken) < 2 {
 		return nil, errors.New("malformed authorization header: " + authorization)
 	}
-	return jwt.Parse([]byte(bearerAndToken[1]), jwt.WithKeySet(tenantKeys))
+	token, err := jwt.Parse([]byte(bearerAndToken[1]), jwt.WithKeySet(tenantKeys))
+	if err != nil {
+		return nil, err
+	}
+	audienceValidated := false
+	for _, anAudience := range token.Audience() {
+		if anAudience == auth0Audience {
+			audienceValidated = true
+			break
+		}
+	}
+	if !audienceValidated {
+		return nil, errors.New("invalid audience")
+	}
+	return token, nil
 }
 
-// getTenantKeys fetch and parse the tenant JSON Web Keys (JWK). The keys
+// fetchTenantKeys fetch and parse the tenant JSON Web Keys (JWK). The keys
 // are used for JWT token validation during requests authorization.
-func getTenantKeys() {
+func fetchTenantKeys() {
 	set, err := jwk.Fetch(context.Background(),
 		fmt.Sprintf("https://%s/.well-known/jwks.json", auth0Domain))
 	if err != nil {
@@ -137,28 +143,9 @@ func getTenantKeys() {
 	tenantKeys = set
 }
 
-func exitWithError(message string) {
-	fmt.Fprintf(os.Stderr, "%s\n", message)
-	os.Exit(1)
-}
-
-func parseArgs() {
-	flag.StringVar(&auth0Audience, "a",
-		os.Getenv("AUTH0_AUDIENCE"), "Auth0 API identifier, as audience")
-	flag.StringVar(&auth0Domain, "d",
-		os.Getenv("AUTH0_DOMAIN"), "Auth0 API tenant domain")
-	flag.Parse()
-	if auth0Audience == "" {
-		exitWithError("Auth0 API identifier (as audience) missing")
-	}
-	if auth0Domain == "" {
-		exitWithError("Auth0 API tenant domain missing")
-	}
-}
-
 func main() {
-	parseArgs()
-	getTenantKeys()
+	initConfig()
+	fetchTenantKeys()
 
 	router := http.NewServeMux()
 	router.Handle("/", http.NotFoundHandler())
