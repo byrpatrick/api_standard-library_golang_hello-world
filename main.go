@@ -4,18 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net/http"
-	"os"
-	"path"
 	"strings"
 
 	"github.com/lestrrat-go/jwx/jwk"
 	"github.com/lestrrat-go/jwx/jwt"
-	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -93,6 +88,7 @@ func handleCORS(next http.Handler) http.Handler {
 	})
 }
 
+// validateToken middleware verifies a valid Auth0 JWT token being present in the request.
 func validateToken(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
 		token, err := extractToken(req)
@@ -102,27 +98,14 @@ func validateToken(next http.Handler) http.Handler {
 			sendMessage(rw, &message{err.Error()})
 			return
 		}
-		if !containsValidAudience(token) {
-			rw.WriteHeader(http.StatusUnauthorized)
-			sendMessage(rw, &message{"invalid audience"})
-			return
-		}
 		ctxWithToken := context.WithValue(req.Context(), ctxTokenKey, token)
 		next.ServeHTTP(rw, req.WithContext(ctxWithToken))
 	})
 }
 
-func containsValidAudience(token jwt.Token) bool {
-	for _, anAudience := range token.Audience() {
-		if anAudience == auth0Audience {
-			return true
-		}
-	}
-	return false
-}
-
 // extractToken parses the Authorization HTTP header for valid JWT token and
-// validates it with AUTH0 JWK keys
+// validates it with AUTH0 JWK keys. Also verifies if the audience present in
+// the token matches with the designated audience as per current configuration.
 func extractToken(req *http.Request) (jwt.Token, error) {
 	authorization := req.Header.Get(authHeader)
 	if authorization == "" {
@@ -132,7 +115,21 @@ func extractToken(req *http.Request) (jwt.Token, error) {
 	if len(bearerAndToken) < 2 {
 		return nil, errors.New("malformed authorization header: " + authorization)
 	}
-	return jwt.Parse([]byte(bearerAndToken[1]), jwt.WithKeySet(tenantKeys))
+	token, err := jwt.Parse([]byte(bearerAndToken[1]), jwt.WithKeySet(tenantKeys))
+	if err != nil {
+		return nil, err
+	}
+	audienceValidated := false
+	for _, anAudience := range token.Audience() {
+		if anAudience == auth0Audience {
+			audienceValidated = true
+			break
+		}
+	}
+	if !audienceValidated {
+		return nil, errors.New("invalid audience")
+	}
+	return token, nil
 }
 
 // fetchTenantKeys fetch and parse the tenant JSON Web Keys (JWK). The keys
@@ -146,70 +143,9 @@ func fetchTenantKeys() {
 	tenantKeys = set
 }
 
-func exitWithError(message string) {
-	fmt.Fprintf(os.Stderr, "%s\n\n", message)
-	fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
-	flag.PrintDefaults()
-	os.Exit(1)
-}
-
-func loadEnvYAML() {
-	// yaml configuration is expected in current working directory
-	myWd, err := os.Getwd()
-	if err != nil {
-		log.Fatal(err)
-	}
-	envCfg := path.Join(myWd, yamlCfgFileName)
-	_, err = os.Stat(envCfg)
-	if err != nil && errors.Is(err, os.ErrNotExist) {
-		return
-	}
-	cfgContents, err := ioutil.ReadFile(envCfg)
-	if err != nil {
-		log.Fatalf("error reading %s: %v ", yamlCfgFileName, err)
-	}
-	cfg := map[string]string{}
-	err = yaml.Unmarshal(cfgContents, cfg)
-	if err != nil {
-		log.Fatalf("yaml unmarshal error: %v", err)
-	}
-	if val, found := cfg[domainYamlKey]; found {
-		auth0Domain = val
-	}
-	if val, found := cfg[audienceYamlKey]; found {
-		auth0Audience = val
-	}
-}
-
-func parseArgs() {
-	var argAudience, argDomain string
-	flag.StringVar(&argAudience, "a",
-		os.Getenv("AUTH0_AUDIENCE"), "Auth0 API identifier, as audience")
-	flag.StringVar(&argDomain, "d",
-		os.Getenv("AUTH0_DOMAIN"), "Auth0 API tenant domain")
-	flag.Parse()
-	if argAudience != "" {
-		auth0Audience = argAudience
-	}
-	if argDomain != "" {
-		auth0Domain = argDomain
-	}
-}
-
-func initConfig() {
-	loadEnvYAML()
-	parseArgs()
-	if auth0Audience == "" {
-		exitWithError("Auth0 API identifier (as audience) missing")
-	}
-	if auth0Domain == "" {
-		exitWithError("Auth0 API tenant domain missing")
-	}
-	fetchTenantKeys()
-}
-
 func main() {
 	initConfig()
+	fetchTenantKeys()
 
 	router := http.NewServeMux()
 	router.Handle("/", http.NotFoundHandler())
