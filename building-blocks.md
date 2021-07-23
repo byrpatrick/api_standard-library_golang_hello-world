@@ -108,19 +108,10 @@ func extractToken(req *http.Request) (jwt.Token, error) {
 	if len(bearerAndToken) < 2 {
 		return nil, errors.New("malformed authorization header")
 	}
-	token, err := jwt.Parse([]byte(bearerAndToken[1]), jwt.WithKeySet(tenantKeys))
+	token, err := jwt.Parse([]byte(bearerAndToken[1]), jwt.WithKeySet(tenantKeys),
+      jwt.WithValidate(true), jwt.WithAudience(auth0Audience))
 	if err != nil {
 		return nil, err
-	}
-	audienceValidated := false
-	for _, anAudience := range token.Audience() {
-		if anAudience == auth0Audience {
-			audienceValidated = true
-			break
-		}
-	}
-	if !audienceValidated {
-		return nil, errors.New("invalid audience")
 	}
 	return token, nil
 }
