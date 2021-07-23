@@ -127,6 +127,28 @@ server.
 You can try out any of our full stack demos to see the client-server Auth0 workflow in action using your preferred
 front-end and back-end technologies.
 
+## Test the Admin Endpoint
+
+The `/admin` endpoint requires the access token to contain the `read:admin-messages` permission. The best way to
+simulate this client-server secured request is to use any of the Hello World client demo apps to log in as a user that
+has that permission.
+
+Use following steps to create a user with `read:admin-messages` permission.
+
+- Head back to your Auth0 API page, click on "Settings" tab. Toggle "Enable RBAC" and "Add Permissions in the Access
+  Token" to enabled state. Click "Save" at bottom of this page.
+
+- Click "Permissions" tab on your Auth0 API page. Add a new permission with `Scope` as `read:admin-messages`, use
+  any `Description` of your choice.
+
+- Create an `admin` role from the Auth0 dashboard, under "User Management"
+
+- Go to "Permissions" tab of the `admin` role and click "Add Permissions". Select your API from the dropdown and add
+  the `read:admin-messages` permission to the role.
+
+- Assign the `admin` role to any existing user. You can also create a new user and assign `admin` role to the new user
+  instead.
+
 ## API Endpoints
 
 ### 🔓 Get public message
