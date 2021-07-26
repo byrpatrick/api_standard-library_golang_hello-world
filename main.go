@@ -17,7 +17,6 @@ const (
 	corsAllowedDomain = "http://localhost:4040"
 	authHeader        = "Authorization"
 	ctxTokenKey       = "Auth0Token"
-	permClaim         = "permissions"
 )
 
 const (
@@ -124,43 +123,6 @@ func extractToken(req *http.Request) (jwt.Token, error) {
 	return token, nil
 }
 
-func hasPermission(next http.Handler, permission string) http.Handler {
-	return http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
-		token := req.Context().Value(ctxTokenKey).(jwt.Token)
-		if token == nil {
-			fmt.Printf("failed to find token in context\n")
-			rw.WriteHeader(http.StatusForbidden)
-			sendMessage(rw, &message{http.StatusText(http.StatusForbidden)})
-			return
-		}
-		if !tokenHasPermission(token, permission) {
-			fmt.Printf("permission check failed\n")
-			rw.WriteHeader(http.StatusForbidden)
-			sendMessage(rw, &message{http.StatusText(http.StatusForbidden)})
-			return
-		}
-		next.ServeHTTP(rw, req)
-	})
-}
-
-func tokenHasPermission(token jwt.Token, permission string) bool {
-	claims := token.PrivateClaims()
-	tkPermissions, ok := claims[permClaim]
-	if !ok {
-		return false
-	}
-	tkPermList, ok := tkPermissions.([]interface{})
-	if !ok {
-		return false
-	}
-	for _, perm := range tkPermList {
-		if perm == permission {
-			return true
-		}
-	}
-	return false
-}
-
 // fetchTenantKeys fetch and parse the tenant JSON Web Keys (JWK). The keys
 // are used for JWT token validation during requests authorization.
 func fetchTenantKeys() {
@@ -180,8 +142,7 @@ func main() {
 	router.Handle("/", http.NotFoundHandler())
 	router.Handle("/api/messages/public", http.HandlerFunc(publicApiHandler))
 	router.Handle("/api/messages/protected", validateToken(http.HandlerFunc(protectedApiHandler)))
-	router.Handle("/api/messages/admin",
-		validateToken(hasPermission(http.HandlerFunc(adminApiHandler), "read:admin-messages")))
+	router.Handle("/api/messages/admin", validateToken(http.HandlerFunc(adminApiHandler)))
 	routerWithCORS := handleCORS(router)
 
 	server := &http.Server{
