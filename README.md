@@ -13,7 +13,8 @@ Install the project dependencies:
 go mod download
 ```
 
-Open the `env.yaml` file at the root of the project and update the values of `auth0-audience` and `auth0-domain`.
+Create the `env.yaml` file at the root of the project and populate it with the values of `auth0-audience` and
+`auth0-domain` parameters as in the following example.
 
 ```yaml
 auth0-audience: my_auth0_api_audience
