@@ -7,16 +7,14 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"strings"
 
+	"github.com/auth0/go-jwt-middleware"
+	"github.com/form3tech-oss/jwt-go"
 	"github.com/lestrrat-go/jwx/jwk"
-	"github.com/lestrrat-go/jwx/jwt"
 )
 
 const (
 	corsAllowedDomain = "http://localhost:4040"
-	authHeader        = "Authorization"
-	ctxTokenKey       = "Auth0Token"
 	permClaim         = "permissions"
 )
 
@@ -89,44 +87,29 @@ func handleCORS(next http.Handler) http.Handler {
 	})
 }
 
-// validateToken middleware verifies a valid Auth0 JWT token being present in the request.
 func validateToken(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
-		token, err := extractToken(req)
-		if err != nil {
-			fmt.Printf("failed to parse payload: %s\n", err)
-			rw.WriteHeader(http.StatusUnauthorized)
-			sendMessage(rw, &message{err.Error()})
+		token := req.Context().Value("user").(*jwt.Token)
+		if token == nil {
+			fmt.Printf("failed to find token in context\n")
+			rw.WriteHeader(http.StatusForbidden)
+			sendMessage(rw, &message{http.StatusText(http.StatusForbidden)})
 			return
 		}
-		ctxWithToken := context.WithValue(req.Context(), ctxTokenKey, token)
-		next.ServeHTTP(rw, req.WithContext(ctxWithToken))
+		mc := token.Claims.(jwt.MapClaims)
+		if !mc.VerifyAudience(auth0Audience, true) {
+			fmt.Printf("audience verification failed\n")
+			rw.WriteHeader(http.StatusForbidden)
+			sendMessage(rw, &message{http.StatusText(http.StatusForbidden)})
+			return
+		}
+		next.ServeHTTP(rw, req)
 	})
-}
-
-// extractToken parses the Authorization HTTP header for valid JWT token and
-// validates it with AUTH0 JWK keys. Also verifies if the audience present in
-// the token matches with the designated audience as per current configuration.
-func extractToken(req *http.Request) (jwt.Token, error) {
-	authorization := req.Header.Get(authHeader)
-	if authorization == "" {
-		return nil, errors.New("authorization header missing")
-	}
-	bearerAndToken := strings.Split(authorization, " ")
-	if len(bearerAndToken) < 2 {
-		return nil, errors.New("malformed authorization header: " + authorization)
-	}
-	token, err := jwt.Parse([]byte(bearerAndToken[1]), jwt.WithKeySet(tenantKeys),
-		jwt.WithValidate(true), jwt.WithAudience(auth0Audience))
-	if err != nil {
-		return nil, err
-	}
-	return token, nil
 }
 
 func hasPermission(next http.Handler, permission string) http.Handler {
 	return http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
-		token := req.Context().Value(ctxTokenKey).(jwt.Token)
+		token := req.Context().Value("user").(*jwt.Token)
 		if token == nil {
 			fmt.Printf("failed to find token in context\n")
 			rw.WriteHeader(http.StatusForbidden)
@@ -143,8 +126,8 @@ func hasPermission(next http.Handler, permission string) http.Handler {
 	})
 }
 
-func tokenHasPermission(token jwt.Token, permission string) bool {
-	claims := token.PrivateClaims()
+func tokenHasPermission(token *jwt.Token, permission string) bool {
+	claims := token.Claims.(jwt.MapClaims)
 	tkPermissions, ok := claims[permClaim]
 	if !ok {
 		return false
@@ -172,16 +155,47 @@ func fetchTenantKeys() {
 	tenantKeys = set
 }
 
+func jwtHandler() func(h http.Handler) http.Handler {
+	jwtMiddleware := jwtmiddleware.New(jwtmiddleware.Options{
+		ValidationKeyGetter: func(token *jwt.Token) (interface{}, error) {
+			return getPublicKey(token.Header["kid"].(string))
+		},
+		SigningMethod: jwt.SigningMethodRS256,
+	})
+	authHandler := jwtMiddleware.Handler
+	return authHandler
+}
+
+func getPublicKey(kid string) (interface{}, error) {
+	for it := tenantKeys.Iterate(context.Background()); it.Next(context.Background()); {
+		pair := it.Pair()
+		key := pair.Value.(jwk.Key)
+		if key.KeyID() != kid {
+			continue
+		}
+		var rawKey interface{}
+		if err := key.Raw(&rawKey); err != nil {
+			log.Printf("failed to create public key: %s", err)
+			return nil, err
+		}
+		return rawKey, nil
+	}
+	return nil, errors.New("no matching key found")
+}
+
 func main() {
 	initConfig()
 	fetchTenantKeys()
 
+	authHandler := jwtHandler()
+
 	router := http.NewServeMux()
 	router.Handle("/", http.NotFoundHandler())
 	router.Handle("/api/messages/public", http.HandlerFunc(publicApiHandler))
-	router.Handle("/api/messages/protected", validateToken(http.HandlerFunc(protectedApiHandler)))
-	router.Handle("/api/messages/admin",
-		validateToken(hasPermission(http.HandlerFunc(adminApiHandler), "read:admin-messages")))
+	router.Handle("/api/messages/protected", authHandler(validateToken(
+		http.HandlerFunc(protectedApiHandler))))
+	router.Handle("/api/messages/admin", authHandler(validateToken(hasPermission(
+		http.HandlerFunc(adminApiHandler), "read:admin-messages"))))
 	routerWithCORS := handleCORS(router)
 
 	server := &http.Server{
