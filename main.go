@@ -3,19 +3,20 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
+	"time"
 
-	"github.com/auth0/go-jwt-middleware"
-	"github.com/form3tech-oss/jwt-go"
-	"github.com/lestrrat-go/jwx/jwk"
+	jwtmiddleware "github.com/auth0/go-jwt-middleware"
+	"github.com/auth0/go-jwt-middleware/validate/josev2"
+	"gopkg.in/square/go-jose.v2"
+	"gopkg.in/square/go-jose.v2/jwt"
 )
 
 const (
 	corsAllowedDomain = "http://localhost:4040"
-	permClaim         = "permissions"
 )
 
 const (
@@ -28,10 +29,6 @@ const (
 var (
 	auth0Audience string
 	auth0Domain   string
-)
-
-var (
-	tenantKeys jwk.Set
 )
 
 type message struct {
@@ -87,36 +84,25 @@ func handleCORS(next http.Handler) http.Handler {
 	})
 }
 
-func validateToken(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
-		token := req.Context().Value("user").(*jwt.Token)
-		if token == nil {
-			fmt.Printf("failed to find token in context\n")
-			rw.WriteHeader(http.StatusForbidden)
-			sendMessage(rw, &message{http.StatusText(http.StatusForbidden)})
-			return
-		}
-		mc := token.Claims.(jwt.MapClaims)
-		if !mc.VerifyAudience(auth0Audience, true) {
-			fmt.Printf("audience verification failed\n")
-			rw.WriteHeader(http.StatusForbidden)
-			sendMessage(rw, &message{http.StatusText(http.StatusForbidden)})
-			return
-		}
-		next.ServeHTTP(rw, req)
-	})
-}
-
 func hasPermission(next http.Handler, permission string) http.Handler {
 	return http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
-		token := req.Context().Value("user").(*jwt.Token)
+		token := req.Context().Value(jwtmiddleware.ContextKey{})
 		if token == nil {
 			fmt.Printf("failed to find token in context\n")
 			rw.WriteHeader(http.StatusForbidden)
 			sendMessage(rw, &message{http.StatusText(http.StatusForbidden)})
 			return
 		}
-		if !tokenHasPermission(token, permission) {
+		uc := token.(*josev2.UserContext)
+		pc := uc.CustomClaims.(*PermissionsClaim)
+		permissionFound := false
+		for _, perm := range pc.Permissions {
+			if perm == permission {
+				permissionFound = true
+				break
+			}
+		}
+		if !permissionFound {
 			fmt.Printf("permission check failed\n")
 			rw.WriteHeader(http.StatusForbidden)
 			sendMessage(rw, &message{http.StatusText(http.StatusForbidden)})
@@ -126,76 +112,55 @@ func hasPermission(next http.Handler, permission string) http.Handler {
 	})
 }
 
-func tokenHasPermission(token *jwt.Token, permission string) bool {
-	claims := token.Claims.(jwt.MapClaims)
-	tkPermissions, ok := claims[permClaim]
-	if !ok {
-		return false
-	}
-	tkPermList, ok := tkPermissions.([]interface{})
-	if !ok {
-		return false
-	}
-	for _, perm := range tkPermList {
-		if perm == permission {
-			return true
-		}
-	}
-	return false
+type PermissionsClaim struct {
+	Permissions []string `json:"permissions"`
 }
 
-// fetchTenantKeys fetch and parse the tenant JSON Web Keys (JWK). The keys
-// are used for JWT token validation during requests authorization.
-func fetchTenantKeys() {
-	set, err := jwk.Fetch(context.Background(),
-		fmt.Sprintf("https://%s/.well-known/jwks.json", auth0Domain))
-	if err != nil {
-		log.Fatalf("failed to parse tenant json web keys: %s\n", err)
-	}
-	tenantKeys = set
+func (pc *PermissionsClaim) Validate(_ context.Context) error {
+	return nil // no validation required
 }
 
 func jwtHandler() func(h http.Handler) http.Handler {
-	jwtMiddleware := jwtmiddleware.New(jwtmiddleware.Options{
-		ValidationKeyGetter: func(token *jwt.Token) (interface{}, error) {
-			return getPublicKey(token.Header["kid"].(string))
-		},
-		SigningMethod: jwt.SigningMethodRS256,
-	})
-	authHandler := jwtMiddleware.Handler
-	return authHandler
-}
-
-func getPublicKey(kid string) (interface{}, error) {
-	for it := tenantKeys.Iterate(context.Background()); it.Next(context.Background()); {
-		pair := it.Pair()
-		key := pair.Value.(jwk.Key)
-		if key.KeyID() != kid {
-			continue
-		}
-		var rawKey interface{}
-		if err := key.Raw(&rawKey); err != nil {
-			log.Printf("failed to create public key: %s", err)
-			return nil, err
-		}
-		return rawKey, nil
+	auth0DomainURL, err := url.Parse("https://" + auth0Domain)
+	if err != nil {
+		log.Fatal(err)
 	}
-	return nil, errors.New("no matching key found")
+	keyProvider := josev2.NewCachingJWKSProvider(*auth0DomainURL, 30*time.Minute)
+	expectedClaimsFunc := func() jwt.Expected {
+		return jwt.Expected{
+			Audience: []string{auth0Audience},
+		}
+	}
+	permissionClaimFunc := func() josev2.CustomClaims {
+		return &PermissionsClaim{}
+	}
+
+	validator, err := josev2.New(
+		keyProvider.KeyFunc,
+		jose.RS256,
+		josev2.WithExpectedClaims(expectedClaimsFunc),
+		josev2.WithCustomClaims(permissionClaimFunc),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	m := jwtmiddleware.New(validator.ValidateToken)
+	return m.CheckJWT
 }
 
 func main() {
 	initConfig()
-	fetchTenantKeys()
 
-	authHandler := jwtHandler()
+	validateToken := jwtHandler()
 
 	router := http.NewServeMux()
 	router.Handle("/", http.NotFoundHandler())
 	router.Handle("/api/messages/public", http.HandlerFunc(publicApiHandler))
-	router.Handle("/api/messages/protected", authHandler(validateToken(
-		http.HandlerFunc(protectedApiHandler))))
-	router.Handle("/api/messages/admin", authHandler(validateToken(hasPermission(
-		http.HandlerFunc(adminApiHandler), "read:admin-messages"))))
+	router.Handle("/api/messages/protected", validateToken(
+		http.HandlerFunc(protectedApiHandler)))
+	router.Handle("/api/messages/admin", validateToken(hasPermission(
+		http.HandlerFunc(adminApiHandler), "read:admin-messages")))
 	routerWithCORS := handleCORS(router)
 
 	server := &http.Server{
