@@ -162,8 +162,7 @@ func jwtHandler() func(h http.Handler) http.Handler {
 		},
 		SigningMethod: jwt.SigningMethodRS256,
 	})
-	authHandler := jwtMiddleware.Handler
-	return authHandler
+	return jwtMiddleware.Handler
 }
 
 func getPublicKey(kid string) (interface{}, error) {
