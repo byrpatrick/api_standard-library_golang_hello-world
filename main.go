@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -145,7 +146,22 @@ func jwtHandler() func(h http.Handler) http.Handler {
 		log.Fatal(err)
 	}
 
-	m := jwtmiddleware.New(validator.ValidateToken)
+	testErrorHandler := func(w http.ResponseWriter, r *http.Request, err error) {
+		if errors.Is(err, jwtmiddleware.ErrJWTInvalid) {
+			fmt.Println("Found ErrJWTInvalid")
+		}
+		fmt.Printf("%v", err)
+		w.WriteHeader(http.StatusInternalServerError)
+	}
+
+	testTokenExtractor := jwtmiddleware.MultiTokenExtractor(
+		jwtmiddleware.AuthHeaderTokenExtractor,
+		jwtmiddleware.CookieTokenExtractor("v2-test-cookie"))
+
+	m := jwtmiddleware.New(validator.ValidateToken,
+		jwtmiddleware.WithErrorHandler(testErrorHandler),
+		jwtmiddleware.WithTokenExtractor(testTokenExtractor),
+	)
 	return m.CheckJWT
 }
 
